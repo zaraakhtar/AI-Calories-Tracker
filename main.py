@@ -98,17 +98,22 @@ def analyze_food_with_ai(query):
     )
     return completion.choices[0].message.content
 
-def analyze_image_with_ai(base64_image):
+def analyze_image_with_ai(base64_image, user_note=""):
     try:
         # THE NEW 2026 VISION MODEL ID
         MODEL_ID = "meta-llama/llama-4-scout-17b-16e-instruct"
         
+        # Build prompt: Include user note if they wrote anything extra!
+        main_prompt = "Identify the food items OR exercise in this image.\n"
+        if user_note:
+            main_prompt += f"USER NOTES: The user said: '{user_note}'. Adjust your estimation based on this note.\n"
+
         completion = client.chat.completions.create(
             messages=[{
                 "role": "user",
                 "content": [
                     {"type": "text", "text": (
-                        "Identify the food items OR exercise in this image.\n"
+                        f"{main_prompt}\n"
                         "RULES:\n"
                         "1. NO introductory text.\n"
                         "2. List food/exercise briefly (no per-item macros).\n"
@@ -263,11 +268,10 @@ async def receive_whatsapp_message(request: Request):
             return Response(content="🔥 *ENTIRE HISTORY DELETED*\nAll your calorie logs have been wiped from the database.", media_type="text/plain")
 
         # 2. RUN ANALYSIS (IMAGE VS TEXT)
-        # Use a clear 'if/else' so it never does both
         if image_b64:
-            print("📸 IMAGE DETECTED: Sending to Vision LLM...")
-            ai_response = analyze_image_with_ai(image_b64)
-            log_text = "📸 Photo Entry"
+            print(f"📸 Combined Entry: Photo + '{body}'")
+            ai_response = analyze_image_with_ai(image_b64, user_note=body)
+            log_text = f"📸 Photo ({body})" if body else "📸 Photo Entry"
         else:
             print(f"✍️ TEXT DETECTED: Analyzing '{body}'...")
             ai_response = analyze_food_with_ai(body)
