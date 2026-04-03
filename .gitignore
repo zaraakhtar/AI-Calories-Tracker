@@ -1,0 +1,31 @@
+# --- Node.js / WhatsApp ---
+node_modules/
+.wwebjs_auth/
+.wwebjs_cache/
+npm-debug.log*
+package-lock.json
+
+# --- Python / Virtual Env ---
+__pycache__/
+venv/
+.venv/
+*.py[cod]
+*$py.class
+.pytest_cache/
+build/
+dist/
+
+# --- Database (Local SQLite) ---
+# We ignore the actual data so your personal calories aren't on GitHub
+*.db
+*.db-journal
+
+# --- Secrets & Config ---
+# CRITICAL: Never push your API keys!
+.env
+
+# --- System & IDEs ---
+.vscode/
+.idea/
+.DS_Source
+Thumbs.db
