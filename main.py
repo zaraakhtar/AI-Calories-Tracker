@@ -81,15 +81,31 @@ def calculate_streak(phone_number, exercise_only=False):
             
     return streak
 
+def validate_macro_math(p, c, f, calories):
+    """Ensure the AI's total calories align with the macro breakdown (4/4/9 rule)."""
+    # Standard formula: (P*4) + (C*4) + (F*9)
+    calculated_cals = (p * 4) + (c * 4) + (f * 9)
+    
+    # Allow a 15% margin of error for "thermal effect" or rounding
+    margin = 0.15
+    if not (calculated_cals * (1 - margin) <= calories <= calculated_cals * (1 + margin)):
+        # If the AI's total is way off, override the total calories with the math-based one
+        return int(calculated_cals)
+    return calories
+
 def analyze_food_with_ai(query):
     prompt = (
         "Role: Expert Nutritionist & Fitness Coach.\n"
-        f"Task: Analyze the user's input: '{query}'.\n\n"
-        "CONTEXT & CALIBRATION:\n"
-        "1. Assume standard restaurant serving sizes unless specified.\n"
-        "2. If the user is in Pakistan, account for local cooking styles (higher oil/ghee content).\n"
-        "3. For ambiguous entries (e.g., 'Biryani'), use a weighted average of a standard serving.\n\n"
+        f"Analyze '{query}'.\n"
+        "PROCESS:\n"
+        "1. <thinking>: Identify the food, likely restaurant (look for clues in text), and portion size.\n"
+        "2. <calculation>: Break down macros (P/C/F) based on that portion.\n"
+        "3. <final>: Provide the output in the required format.\n\n"
         "RULES:\n"
+        "- If no portion is mentioned, assume 1 standard restaurant serving.\n"
+        "- If Pakistani cuisine: increase oil/fats by 15% compared to western equivalents.\n"
+        "- Output ONLY the final log format, do not show your <thinking> tags.\n\n"
+        "Log Type: [Food/Exercise]\n"
         "1. Start with 'Log Type: Food' or 'Log Type: Exercise'.\n"
         "2. NO conversational filler.\n"
         "3. List identified items clearly.\n"
@@ -109,10 +125,12 @@ def analyze_image_with_ai(base64_image, user_note=""):
         MODEL_ID = "meta-llama/llama-4-scout-17b-16e-instruct"
         
         main_prompt = (
-            "Identify all food items or exercises in this image.\n"
-            "ESTIMATION LOGIC:\n"
-            "- Estimate portions based on visual size relative to the plate/hand.\n"
-            "- Identify hidden high-calorie ingredients (sauces, dressings, oil glazes).\n"
+            "Identify the food items or exercise in this image.\n"
+            "DETECTION RULES:\n"
+            "1. Look for branding: Check packaging, napkins, or cups for restaurant logos (e.g., Savour, Cheezious, Pizza Max, KFC).\n"
+            "2. Portions: Estimate the size relative to the plate or surrounding objects (e.g., '1.5 cups of rice', '8-inch pizza').\n"
+            "3. Regional Context: The user is in Pakistan. If you identify a 'Crown Crust' or 'Stuffed Crust' pizza, account for heavy mayo/ranch and cheese edges (+350 kcal per large slice).\n"
+            "4. Hidden Fats: If the food looks oily or glistening (common in local Karahis or Biryanis), increase the Fat estimate by 20%.\n"
         )
         if user_note:
             main_prompt += f"CRITICAL USER NOTE: {user_note}. Use this to override visual estimates.\n"
@@ -301,6 +319,10 @@ async def receive_whatsapp_message(request: Request):
         p_val = int(p_match.group(1)) if p_match or is_exercise == 1 else 0
         c_val = int(c_match.group(1)) if c_match or is_exercise == 1 else 0
         f_val = int(f_match.group(1)) if f_match or is_exercise == 1 else 0
+
+        # Math Guardrail: Correct potential AI hallucinations
+        if is_exercise == 0:
+            calories_value = validate_macro_math(p_val, c_val, f_val, calories_value)
             
         print(f"DEBUG: Extracted {calories_value}kcal, P:{p_val}, C:{c_val}, F:{f_val}, Exercise:{is_exercise}")
         
