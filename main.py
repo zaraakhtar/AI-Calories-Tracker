@@ -83,12 +83,17 @@ def calculate_streak(phone_number, exercise_only=False):
 
 def analyze_food_with_ai(query):
     prompt = (
-        f"Nutritionist: Analyze '{query}'.\n"
+        "Role: Expert Nutritionist & Fitness Coach.\n"
+        f"Task: Analyze the user's input: '{query}'.\n\n"
+        "CONTEXT & CALIBRATION:\n"
+        "1. Assume standard restaurant serving sizes unless specified.\n"
+        "2. If the user is in Pakistan, account for local cooking styles (higher oil/ghee content).\n"
+        "3. For ambiguous entries (e.g., 'Biryani'), use a weighted average of a standard serving.\n\n"
         "RULES:\n"
-        "1. NO introductory or conversational text.\n"
-        "2. List food items or exercise briefly (no per-item macros).\n"
-        "3. Specify 'Log Type: Food' OR 'Log Type: Exercise' at the start.\n"
-        "4. END with EXACTLY this format:\n"
+        "1. Start with 'Log Type: Food' or 'Log Type: Exercise'.\n"
+        "2. NO conversational filler.\n"
+        "3. List identified items clearly.\n"
+        "4. FORMAT ENDING EXACTLY:\n"
         "Total Macros: Protein: [g], Carbs: [g], Fats: [g]\n"
         "Total Estimated: [number] calories"
     )
@@ -103,10 +108,14 @@ def analyze_image_with_ai(base64_image, user_note=""):
         # THE NEW 2026 VISION MODEL ID
         MODEL_ID = "meta-llama/llama-4-scout-17b-16e-instruct"
         
-        # Build prompt: Include user note if they wrote anything extra!
-        main_prompt = "Identify the food items OR exercise in this image.\n"
+        main_prompt = (
+            "Identify all food items or exercises in this image.\n"
+            "ESTIMATION LOGIC:\n"
+            "- Estimate portions based on visual size relative to the plate/hand.\n"
+            "- Identify hidden high-calorie ingredients (sauces, dressings, oil glazes).\n"
+        )
         if user_note:
-            main_prompt += f"USER NOTES: The user said: '{user_note}'. Adjust your estimation based on this note.\n"
+            main_prompt += f"CRITICAL USER NOTE: {user_note}. Use this to override visual estimates.\n"
 
         completion = client.chat.completions.create(
             messages=[{
@@ -281,7 +290,7 @@ async def receive_whatsapp_message(request: Request):
         is_exercise = 1 if "Log Type: Exercise" in ai_response else 0
 
         # Extract Calories
-        matches_cal = re.findall(r"Total Estimated: (\d+)", ai_response, re.IGNORECASE)
+        matches_cal = re.findall(r"(?:Total Estimated|Total|Estimated):\s*~?(\d+)", ai_response, re.IGNORECASE)
         calories_value = int(matches_cal[-1]) if matches_cal else 0
 
         # Extract Macros (Protein: [g], Carbs: [g], Fats: [g])
