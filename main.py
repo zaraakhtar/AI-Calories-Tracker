@@ -376,14 +376,40 @@ async def receive_whatsapp_message(request: Request):
                 day_start = datetime.combine(day_date, datetime.min.time())
                 day_end   = datetime.combine(day_date, datetime.max.time())
                 
-                day_total = db.query(func.sum(CalorieLog.calories)).filter(
+                # Separate Food and Exercise totals
+                food_sum = db.query(func.sum(CalorieLog.calories)).filter(
                     CalorieLog.user_phone == sender,
                     CalorieLog.timestamp >= day_start,
-                    CalorieLog.timestamp <= day_end
+                    CalorieLog.timestamp <= day_end,
+                    CalorieLog.is_exercise == 0
                 ).scalar() or 0
                 
+                ex_sum = db.query(func.sum(CalorieLog.calories)).filter(
+                    CalorieLog.user_phone == sender,
+                    CalorieLog.timestamp >= day_start,
+                    CalorieLog.timestamp <= day_end,
+                    CalorieLog.is_exercise == 1
+                ).scalar() or 0
+                
+                # Bonus Logic
+                if food_sum <= target_cal:
+                    # User said: "just show the number"
+                    display_val = int(food_sum)
+                    bonus_text = ""
+                else:
+                    overflow = food_sum - target_cal
+                    if ex_sum >= overflow:
+                        # Exercise covers the whole overflow
+                        display_val = target_cal
+                        bonus_left = int(ex_sum - overflow)
+                        bonus_text = f" (Covered! +{bonus_left} bonus)" if bonus_left > 0 else " (Covered!)"
+                    else:
+                        # Exercise covers some, but still over
+                        display_val = int(food_sum - ex_sum)
+                        bonus_text = " (Bonus used)"
+                
                 date_str = day_date.strftime("%a, %d %b")
-                report  += f"📅 {date_str}: ```{day_total} / {target_cal} kcal```\n"
+                report  += f"📅 {date_str}: ```{display_val} / {target_cal} kcal```{bonus_text}\n"
             
             # WATER SECTION
             report += "\n💧 *WEEKLY WATER SUMMARY*\n━━━━━━━━━━━━━━━\n"
