@@ -23,6 +23,13 @@ class CalorieLog(Base):
     is_exercise = Column(Integer, default=0) # 0 for Food, 1 for Exercise
     timestamp = Column(DateTime, default=datetime.utcnow)
 
+class WaterLog(Base):
+    __tablename__ = "water_logs"
+    id = Column(Integer, primary_key=True, index=True)
+    user_phone = Column(String)
+    glasses = Column(Integer, default=1)
+    timestamp = Column(DateTime, default=datetime.utcnow)
+
 
 def init_db():
     Base.metadata.create_all(bind=engine)
