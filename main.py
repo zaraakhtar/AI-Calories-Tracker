@@ -211,11 +211,14 @@ def calculate_streak(phone_number, exercise_only=False):
 
 def validate_macro_math(p, c, f, calories):
     """Override AI calorie total if it deviates >8% from macro math (4/4/9 rule)."""
-    calculated_cals = (p * 4) + (c * 4) + (f * 9)
-    margin = 0.08  # Tightened from 15% — 4/4/9 is thermodynamically exact
-    if not (calculated_cals * (1 - margin) <= calories <= calculated_cals * (1 + margin)):
-        return int(calculated_cals)
-    return calories
+    # Standard formula: (P*4) + (C*4) + (F*9)
+    # Using float math before final integer conversion for peak accuracy
+    calc = (float(p) * 4) + (float(c) * 4) + (float(f) * 9)
+    
+    margin = 0.08  # Tolerates 8% discrepancy
+    if not (calc * (1 - margin) <= calories <= calc * (1 + margin)):
+        return int(round(calc))
+    return int(calories)
 
 def analyze_food_with_ai(query):
     prompt = (
@@ -360,54 +363,115 @@ async def receive_whatsapp_message(request: Request):
 
         elif body.lower() == "!summary":
             db = SessionLocal()
-            target = 1200
+            target_cal = 1200
+            target_water = 10
+            
+            # Using PKT for local day boundaries
+            now_pkt = datetime.now(PKT)
+            
+            # CALORIE SECTION
             report = "📝 *WEEKLY CALORIE SUMMARY*\n━━━━━━━━━━━━━━━\n"
             for i in range(6, -1, -1):
-                day_date  = (datetime.utcnow() - timedelta(days=i)).date()
+                day_date  = (now_pkt - timedelta(days=i)).date()
                 day_start = datetime.combine(day_date, datetime.min.time())
                 day_end   = datetime.combine(day_date, datetime.max.time())
+                
                 day_total = db.query(func.sum(CalorieLog.calories)).filter(
                     CalorieLog.user_phone == sender,
                     CalorieLog.timestamp >= day_start,
                     CalorieLog.timestamp <= day_end
                 ).scalar() or 0
+                
                 date_str = day_date.strftime("%a, %d %b")
-                report  += f"📅 {date_str}: ```{day_total} / {target} kcal```\n"
+                report  += f"📅 {date_str}: ```{day_total} / {target_cal} kcal```\n"
+            
+            # WATER SECTION
+            report += "\n💧 *WEEKLY WATER SUMMARY*\n━━━━━━━━━━━━━━━\n"
+            for i in range(6, -1, -1):
+                day_date  = (now_pkt - timedelta(days=i)).date()
+                day_start = datetime.combine(day_date, datetime.min.time())
+                day_end   = datetime.combine(day_date, datetime.max.time())
+                
+                water_total = db.query(func.sum(WaterLog.glasses)).filter(
+                    WaterLog.user_phone == sender,
+                    WaterLog.timestamp >= day_start,
+                    WaterLog.timestamp <= day_end
+                ).scalar() or 0
+                
+                date_str = day_date.strftime("%a, %d %b")
+                report += f"📅 {date_str}: ```{int(water_total)} / {target_water} glasses```\n"
+                
             db.close()
             report += "━━━━━━━━━━━━━━━"
             return Response(content=report, media_type="text/plain")
 
         elif body.lower() == "!undo":
             db = SessionLocal()
-            last_log = db.query(CalorieLog).filter(
-                CalorieLog.user_phone == sender
-            ).order_by(CalorieLog.timestamp.desc()).first()
-            if not last_log:
+            # 1. Get latest entries from both tables
+            last_food = db.query(CalorieLog).filter(CalorieLog.user_phone == sender).order_by(CalorieLog.timestamp.desc()).first()
+            last_water = db.query(WaterLog).filter(WaterLog.user_phone == sender).order_by(WaterLog.timestamp.desc()).first()
+
+            # 2. Determine which one is newer
+            undone_item = None
+            if last_food and last_water:
+                undone_item = last_food if last_food.timestamp > last_water.timestamp else last_water
+            elif last_food:
+                undone_item = last_food
+            elif last_water:
+                undone_item = last_water
+
+            if not undone_item:
                 db.close()
                 return Response(content="⚠️ No recent entries found to undo.", media_type="text/plain")
-            food_name = last_log.food_item
-            food_cals = last_log.calories
-            db.delete(last_log)
-            db.commit()
-            db.close()
-            daily_metrics = get_daily_metrics(sender)
-            daily_total   = daily_metrics["calories"]
-            food_streak   = calculate_streak(sender, exercise_only=False)
-            target = 1200
-            if daily_total <= target:
-                status_text = f"🟢 *REMAINING:* ```{target - daily_total} kcal```"
+
+            # 3. Handle Deletion and Response
+            is_water = isinstance(undone_item, WaterLog)
+            if is_water:
+                glasses_deleted = undone_item.glasses
+                db.delete(undone_item)
+                db.commit()
+                db.close()
+                
+                glasses = get_water_today(sender)
+                water_streak = calculate_water_streak(sender)
+                bar = build_water_bar(glasses)
+                
+                undo_message = (
+                    f"━━━━━━━━━━━━━━━\n"
+                    f"↩️ *UNDO SUCCESSFUL*\n"
+                    f"━━━━━━━━━━━━━━━\n"
+                    f"Deleted: {glasses_deleted} glass{'es' if glasses_deleted > 1 else ''} of water 💧\n\n"
+                    f"📊 *NEW WATER TOTAL:* ```{glasses} / {WATER_GOAL} glasses```\n"
+                    f"{bar}\n"
+                    f"🌊 *WATER STREAK:* ```{water_streak} days 🔥```\n"
+                    f"━━━━━━━━━━━━━━━"
+                )
             else:
-                status_text = f"🔴 *OVERFLOW:* ```{daily_total - target} kcal```"
-            undo_message = (
-                f"━━━━━━━━━━━━━━━\n"
-                f"↩️ *UNDO SUCCESSFUL*\n"
-                f"━━━━━━━━━━━━━━━\n"
-                f"Deleted: {food_name[:20]} ({food_cals} kcal)\n\n"
-                f"📊 *NEW DAILY TOTAL:* ```{daily_total} / {target} kcal```\n"
-                f"{status_text}\n"
-                f"🍕 *FOOD STREAK:* ```{food_streak} days 🔥```\n"
-                f"━━━━━━━━━━━━━━━"
-            )
+                food_name = undone_item.food_item
+                food_cals = undone_item.calories
+                db.delete(undone_item)
+                db.commit()
+                db.close()
+                
+                daily_metrics = get_daily_metrics(sender)
+                daily_total   = daily_metrics["calories"]
+                food_streak   = calculate_streak(sender, exercise_only=False)
+                target = 1200
+                if daily_total <= target:
+                    status_text = f"🟢 *REMAINING:* ```{target - daily_total} kcal```"
+                else:
+                    status_text = f"🔴 *OVERFLOW:* ```{daily_total - target} kcal```"
+                    
+                undo_message = (
+                    f"━━━━━━━━━━━━━━━\n"
+                    f"↩️ *UNDO SUCCESSFUL*\n"
+                    f"━━━━━━━━━━━━━━━\n"
+                    f"Deleted: {food_name[:20]} ({food_cals} kcal)\n\n"
+                    f"📊 *NEW DAILY TOTAL:* ```{daily_total} / {target} kcal```\n"
+                    f"{status_text}\n"
+                    f"🍕 *FOOD STREAK:* ```{food_streak} days 🔥```\n"
+                    f"━━━━━━━━━━━━━━━"
+                )
             return Response(content=undo_message, media_type="text/plain")
 
         elif body.lower() in ("!commands", "!command"):
@@ -464,20 +528,30 @@ async def receive_whatsapp_message(request: Request):
         elif body.lower() == "!dayhistory":
             db = SessionLocal()
             today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+            
+            # Delete both Calories and Water
             db.query(CalorieLog).filter(
                 CalorieLog.user_phone == sender,
                 CalorieLog.timestamp >= today_start
             ).delete()
+            db.query(WaterLog).filter(
+                WaterLog.user_phone == sender,
+                WaterLog.timestamp >= today_start
+            ).delete()
+            
             db.commit()
             db.close()
-            return Response(content="🗑️ *DAY HISTORY CLEARED*\nAll logs for today have been deleted.", media_type="text/plain")
+            return Response(content="🗑️ *DAY HISTORY CLEARED*\nAll food, exercise, and water logs for today have been deleted.", media_type="text/plain")
 
         elif body.lower() == "!delhistory":
             db = SessionLocal()
+            # Delete all Calories and Water
             db.query(CalorieLog).filter(CalorieLog.user_phone == sender).delete()
+            db.query(WaterLog).filter(WaterLog.user_phone == sender).delete()
+            
             db.commit()
             db.close()
-            return Response(content="🔥 *ENTIRE HISTORY DELETED*\nAll your calorie logs have been wiped from the database.", media_type="text/plain")
+            return Response(content="🔥 *ENTIRE HISTORY DELETED*\nAll your calorie and water logs have been wiped from the database.", media_type="text/plain")
 
         # ── 2. WATER NLP DETECTION (before AI) ───────────────────────────────
         water_glasses = detect_water_log(body) if not image_b64 else None
@@ -521,21 +595,36 @@ async def receive_whatsapp_message(request: Request):
         # ── 4. EXTRACT CALORIES & MACROS ─────────────────────────────────────
         is_exercise = 1 if "Log Type: Exercise" in ai_response else 0
 
-        matches_cal    = re.findall(r"(?:Total Estimated|Total|Estimated):\s*~?(\d+)", ai_response, re.IGNORECASE)
-        calories_value = int(matches_cal[-1]) if matches_cal else 0
+        # Step 1: Isolate the total lines to avoid item-by-item breakdown confusion
+        # This ensures we get the summary values at the end of the AI response
+        lines = ai_response.split('\n')
+        macro_line = next((l for l in lines if "Total Macros:" in l), "")
+        # Search backward for the final calorie total "Total: [num]"
+        total_line = next((l for l in reversed(lines) if "Total:" in l or "Total Estimated:" in l), "")
+        
+        # Step 2: Extract from isolated lines (supporting decimals/floats)
+        p_match = re.search(r"Protein:\s*(\d+(?:\.\d+)?)", macro_line, re.IGNORECASE)
+        c_match = re.search(r"Carbs:\s*(\d+(?:\.\d+)?)",   macro_line, re.IGNORECASE)
+        f_match = re.search(r"Fats:\s*(\d+(?:\.\d+)?)",    macro_line, re.IGNORECASE)
+        
+        p_val = float(p_match.group(1)) if p_match else 0.0
+        c_val = float(c_match.group(1)) if c_match else 0.0
+        f_val = float(f_match.group(1)) if f_match else 0.0
 
-        p_match = re.search(r"Protein: (\d+)", ai_response, re.IGNORECASE)
-        c_match = re.search(r"Carbs: (\d+)",   ai_response, re.IGNORECASE)
-        f_match = re.search(r"Fats: (\d+)",    ai_response, re.IGNORECASE)
+        cal_match = re.search(r"(?:Total(?:\s+Estimated)?):\s*~?(\d+(?:\.\d+)?)", total_line, re.IGNORECASE)
+        calories_value = float(cal_match.group(1)) if cal_match else 0.0
 
-        p_val = int(p_match.group(1)) if p_match else 0
-        c_val = int(c_match.group(1)) if c_match else 0
-        f_val = int(f_match.group(1)) if f_match else 0
-
+        # Step 3: Run code-based math validation (Math Guardrail)
         if is_exercise == 0:
             calories_value = validate_macro_math(p_val, c_val, f_val, calories_value)
+            
+        # Final conversion to integers for consistent tracking
+        p_val = int(round(p_val))
+        c_val = int(round(c_val))
+        f_val = int(round(f_val))
+        calories_value = int(round(calories_value))
 
-        print(f"DEBUG: {calories_value}kcal P:{p_val} C:{c_val} F:{f_val} Ex:{is_exercise}")
+        print(f"DEBUG: Processed: {calories_value}kcal P:{p_val} C:{c_val} F:{f_val} Ex:{is_exercise}")
 
         # ── 5. SAVE TO DATABASE ───────────────────────────────────────────────
         db = SessionLocal()
