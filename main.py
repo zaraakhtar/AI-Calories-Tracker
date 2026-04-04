@@ -210,31 +210,56 @@ def calculate_streak(phone_number, exercise_only=False):
     return streak
 
 def validate_macro_math(p, c, f, calories):
+    """Override AI calorie total if it deviates >8% from macro math (4/4/9 rule)."""
     calculated_cals = (p * 4) + (c * 4) + (f * 9)
-    margin = 0.15
+    margin = 0.08  # Tightened from 15% — 4/4/9 is thermodynamically exact
     if not (calculated_cals * (1 - margin) <= calories <= calculated_cals * (1 + margin)):
         return int(calculated_cals)
     return calories
 
 def analyze_food_with_ai(query):
     prompt = (
-        "Role: Expert Nutritionist & Fitness Coach.\n"
-        f"Analyze '{query}'.\n"
-        "PROCESS:\n"
-        "1. <thinking>: Identify the food, likely restaurant (look for clues in text), and portion size.\n"
-        "2. <calculation>: Break down macros (P/C/F) based on that portion.\n"
-        "3. <final>: Provide the output in the required format.\n\n"
-        "RULES:\n"
-        "- If no portion is mentioned, assume 1 standard restaurant serving.\n"
-        "- If Pakistani cuisine: increase oil/fats by 15% compared to western equivalents.\n"
-        "- Output ONLY the final log format, do not show your <thinking> tags.\n\n"
-        "Log Type: [Food/Exercise]\n"
-        "1. Start with 'Log Type: Food' or 'Log Type: Exercise'.\n"
-        "2. NO conversational filler.\n"
-        "3. List identified items clearly.\n"
-        "4. FORMAT ENDING EXACTLY:\n"
+        "You are a clinical-grade nutrition analyst specializing in Pakistani and South Asian diets.\n"
+        f"Analyze this food/exercise log entry: '{query}'\n\n"
+
+        "═══ STEP-BY-STEP REASONING (do NOT show in output) ═══\n"
+        "STEP 1 — IDENTIFY: Name the food, brand/restaurant if mentioned, and cooking method.\n"
+        "STEP 2 — WEIGHT: Commit to a gram weight for the portion before any calculation.\n"
+        "  Use these Pakistani defaults if no portion stated:\n"
+        "  • Rice / Biryani (1 plate) = 300g\n"
+        "  • Plain roti = 90g | Butter naan (restaurant) = 130g | Paratha = 110g\n"
+        "  • Curry / Salan (1 bowl) = 200g\n"
+        "  • Daal (1 bowl) = 250g\n"
+        "  • Chicken karahi / Mutter (1 serving) = 200g\n"
+        "  • Burger (1 item) = as-served weight\n"
+        "  • Chai with milk = 240ml | Doodh patti = 240ml | Sweet lassi = 300ml\n"
+        "STEP 3 — SOURCE: State whether values come from USDA FoodData Central, "
+        "official brand nutrition label, or calibrated estimate.\n"
+        "STEP 4 — MACROS: Calculate protein/carbs/fats from the committed gram weight.\n"
+        "STEP 5 — SANITY CHECK: Verify output is within these realistic ranges:\n"
+        "  • Plain roti (1): 120–150 kcal | Butter naan (1): 300–380 kcal\n"
+        "  • Rice 300g: 340–390 kcal | Biryani (1 plate): 550–750 kcal\n"
+        "  • Chicken karahi (200g): 280–380 kcal | Daal (250g): 200–280 kcal\n"
+        "  • KFC Zinger: 560–620 kcal | Paratha (1): 280–360 kcal\n"
+        "  • Chai (240ml): 80–120 kcal | Doodh patti: 150–200 kcal | Sweet lassi: 250–350 kcal\n"
+        "  If your result falls outside the range, recalculate.\n\n"
+
+        "═══ PAKISTANI FAT ADJUSTMENT RULES ═══\n"
+        "• Desi curries, gravies, karahi, salan → increase fat by 30% (heavy oil use).\n"
+        "• Deep-fried items (samosa, pakora, puri, bhatura) → add 25g fat per piece minimum.\n"
+        "• Paratha → minimum 15g fat per piece (ghee + dough fat).\n"
+        "• Restaurant naan → add 10g butter/ghee on top of base dough macros.\n"
+        "• Biryani → account for oil layer: add 20g fat per plate beyond base rice+chicken.\n\n"
+
+        "═══ OUTPUT FORMAT (output ONLY this, no reasoning text) ═══\n"
+        "Log Type: Food\n"
+        "Items: [list each item with its gram weight]\n"
         "Total Macros: Protein: [g], Carbs: [g], Fats: [g]\n"
-        "Total Estimated: [number] calories"
+        "Total Estimated: [number] calories\n\n"
+        "If it is exercise (not food):\n"
+        "Log Type: Exercise\n"
+        "Activity: [name and duration]\n"
+        "Total Estimated: [calories burned] calories"
     )
     completion = groq_client.chat.completions.create(
         messages=[{"role": "user", "content": prompt}],
@@ -246,26 +271,49 @@ def analyze_image_with_ai(base64_image, user_note=""):
     try:
         MODEL_ID = "meta-llama/llama-4-scout-17b-16e-instruct"
         main_prompt = (
-            "Identify the food items or exercise in this image.\n"
-            "DETECTION RULES:\n"
-            "1. Look for branding: Check packaging, napkins, or cups for restaurant logos (e.g., Savour, Cheezious, Pizza Max, KFC).\n"
-            "2. Portions: Estimate the size relative to the plate or surrounding objects (e.g., '1.5 cups of rice', '8-inch pizza').\n"
-            "3. Regional Context: The user is in Pakistan. If you identify a 'Crown Crust' or 'Stuffed Crust' pizza, account for heavy mayo/ranch and cheese edges (+350 kcal per large slice).\n"
-            "4. Hidden Fats: If the food looks oily or glistening (common in local Karahis or Biryanis), increase the Fat estimate by 20%.\n"
+            "You are a clinical-grade nutrition analyst specializing in Pakistani and South Asian diets.\n"
+            "Analyze this food/meal image with maximum accuracy.\n\n"
+
+            "═══ VISUAL ANALYSIS RULES ═══\n"
+            "1. BRANDING: Scan packaging, cups, boxes, napkins, and trays for logos\n"
+            "   (e.g., KFC, McDonald's, Pizza Hut, Cheezious, Savour, Hardee's, Subway, BBQ Tonight).\n"
+            "   If brand is identified → use that brand's OFFICIAL published nutrition label.\n"
+            "2. PORTION SCALE — use these physical references to estimate size:\n"
+            "   • Standard Pakistani dinner plate = 26–28cm diameter, holds ~600–800g total food.\n"
+            "   • Tea cup = 150ml | Glass = 240ml | Can/bottle = as labeled.\n"
+            "   • Human hand fist ≈ 1 cup of rice (~185g cooked).\n"
+            "   • Roti diameter vs. hand span: if roti >= hand span = full size (~90g).\n"
+            "3. DEPTH & DENSITY: Estimate depth of food in the container.\n"
+            "   A full plate of biryani heaped 4–5cm = ~350–400g.\n\n"
+
+            "═══ PAKISTANI CALORIE RULES ═══\n"
+            "• Any curry/gravy that looks oily or glistening → increase fat by 30%.\n"
+            "• Deep-fried items (samosa, pakora, puri) → add 25g fat per piece.\n"
+            "• Paratha → minimum 15g fat per piece. Lachha/restaurant paratha → 25g fat.\n"
+            "• Biryani → add 20g fat per plate for the oil layer beyond base rice+protein.\n"
+            "• Stuffed/Crown Crust pizza → add 350 kcal per large slice (heavy cheese + ranch edges).\n"
+            "• Restaurant naan → 300–380 kcal each (butter + size).\n\n"
+
+            "═══ SANITY CHECK RANGES ═══\n"
+            "Verify your output is within these ranges or recalculate:\n"
+            "• Biryani (1 plate): 550–750 kcal | Karahi (200g): 280–380 kcal\n"
+            "• Roti (1): 120–150 kcal | Butter naan: 300–380 kcal | Paratha: 280–360 kcal\n"
+            "• Rice (300g): 340–390 kcal | Daal (250g): 200–280 kcal\n"
+            "• KFC Zinger: 560–620 kcal | Big Mac equivalent: 500–560 kcal\n"
+            "• Chai (240ml): 80–120 kcal | Doodh patti: 150–200 kcal\n"
         )
         if user_note:
-            main_prompt += f"CRITICAL USER NOTE: {user_note}. Use this to override visual estimates.\n"
+            main_prompt += f"\nCRITICAL USER NOTE (overrides visual): {user_note}\n"
+
         completion = groq_client.chat.completions.create(
             messages=[{
                 "role": "user",
                 "content": [
                     {"type": "text", "text": (
                         f"{main_prompt}\n"
-                        "RULES:\n"
-                        "1. NO introductory text.\n"
-                        "2. List food/exercise briefly (no per-item macros).\n"
-                        "3. Specify 'Log Type: Food' OR 'Log Type: Exercise' at the start.\n"
-                        "4. END with EXACTLY this format:\n"
+                        "═══ OUTPUT FORMAT (output ONLY this) ═══\n"
+                        "Log Type: Food\n"
+                        "Items: [each item with estimated gram weight]\n"
                         "Total Macros: Protein: [g], Carbs: [g], Fats: [g]\n"
                         "Total Estimated: [number] calories"
                     )},
@@ -305,7 +353,7 @@ async def receive_whatsapp_message(request: Request):
                 f"{tip}\n\n"
                 "💡 *Activity Tip:* Add 1 extra glass for every\n"
                 "30 min of jumping rope or Pilates!\n\n"
-                f"🗓️ *Water Streak:* {water_streak} day{'s' if water_streak != 1 else ''} 🔥\n"
+                f"🗓️ *Water Streak:* {water_streak} day{'s' if water_streak != 1 else ''} 🔥\n" 
                 "━━━━━━━━━━━━━━━"
             )
             return Response(content=status_msg, media_type="text/plain")
@@ -357,7 +405,7 @@ async def receive_whatsapp_message(request: Request):
                 f"Deleted: {food_name[:20]} ({food_cals} kcal)\n\n"
                 f"📊 *NEW DAILY TOTAL:* ```{daily_total} / {target} kcal```\n"
                 f"{status_text}\n"
-                f"🍕 *FOOD STREAK:* ```{food_streak} days```\n"
+                f"🍕 *FOOD STREAK:* ```{food_streak} days 🔥```\n"
                 f"━━━━━━━━━━━━━━━"
             )
             return Response(content=undo_message, media_type="text/plain")
@@ -408,7 +456,7 @@ async def receive_whatsapp_message(request: Request):
                 f"{bar}\n"
                 f"{glasses} / {WATER_GOAL} glasses\n\n"
                 f"🌟 *STREAKS:* \n"
-                f"🍕 Food: {food_streak}d | 💪 Exercise: {ex_streak}d | 💧 Water: {water_streak}d\n"
+                f"🍕 Food: {food_streak} days 🔥 | 💪 Exercise: {ex_streak} days 🔥 | 💧 Water: {water_streak} days 🔥\n"
                 f"━━━━━━━━━━━━━━━"
             )
             return Response(content=today_report, media_type="text/plain")
@@ -532,7 +580,7 @@ async def receive_whatsapp_message(request: Request):
             f"🔥 Bonus: {bonus_cals} kcal burned\n\n"
             f"{status_text}\n"
             f"🌟 *STREAKS:* \n"
-            f"🍕 Food: {food_streak}d | 💪 Ex: {ex_streak}d | 💧 Water: {water_streak}d\n"
+            f"🍕 Food: {food_streak} days 🔥 | 💪 Exercise: {ex_streak} days 🔥 | 💧 Water: {water_streak} days 🔥\n"
             f"━━━━━━━━━━━━━━━"
         )
         return Response(content=final_message, media_type="text/plain")
